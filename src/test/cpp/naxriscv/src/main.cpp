@@ -41,10 +41,9 @@ void handler_crash(int sig) {
 
   // get void*'s for all entries on the stack
   size = backtrace(array, 10);
-
   // print out all the frames to stderr
   fprintf(stderr, "Error: signal %d:\n", sig);
-  backtrace_symbols_fd(array, size, STDERR_FILENO);
+  backtrace_symbols_fd(array, size, STDERR_FILENO); //函数调用路径
   exit(1);
 }
 
@@ -130,6 +129,7 @@ public:
 #define MAP(type, name, prefix, count, postfix) type name[] = {CALL(count, prefix, postfix)};
 #define MAP_INIT(prefix, count, postfix) CALL(count, prefix, postfix)
 
+//simulation time记录，按照时钟周期进行递增
 vluint64_t main_time = 0;
 
 #define SIM_MASTER_PORT 18654
@@ -308,7 +308,6 @@ public:
     string *putcTarget = NULL;
     RvData incrValue = 0;
 
-
     vector<SocElement*> socElements;
     vector<function<void(u32, u32, u8*)>> snoopWrites;
 
@@ -339,6 +338,9 @@ public:
     virtual int peripheralWrite(u64 address, uint32_t length, uint8_t *data){
 //        if((address & 0xFFFFFFFFF0000000) != 0x10000000) return memoryWrite(address,length,data);
         switch(address){
+            /*
+             * PUTC : 定义输出字符的起始地址，其实就是根据地址进行输出
+             */
         case LITE_UART_OFF_RXTX:
         case PUTC: {
             if(putcNewLine){
@@ -396,6 +398,9 @@ public:
                 if(simMaster){
                     simMasterGetC(c);
                 }
+                /*
+                 * 使用队列保存输入的数据
+                 */
             } else if(!customCin.empty()){
                 memset(data, 0, length);
                 *data = customCin.front();
@@ -515,12 +520,14 @@ public:
 		this->stall = stall;
 	}
 
+    //before Reset
 	virtual void onReset(){
 		nax->FetchCachePlugin_mem_cmd_ready = 1;
 		nax->FetchCachePlugin_mem_rsp_valid = 0;
 	}
 
 	virtual void preCycle(){
+#       //when cmd is coming(valid equals 1)
 		if (nax->FetchCachePlugin_mem_cmd_valid && nax->FetchCachePlugin_mem_cmd_ready && pendingCount == 0) {
 			assertEq("FETCH MISSALIGNED", nax->FetchCachePlugin_mem_cmd_payload_address & (FETCH_MEM_DATA_BYTES-1),0);
 			pendingCount = FETCH_LINE_BYTES;
@@ -530,10 +537,12 @@ public:
 	}
 
 	virtual void postCycle(){
+        //after dealing the cmd
 		nax->FetchCachePlugin_mem_rsp_valid = 0;
 		if(pendingCount != 0 && (!stall || VL_RANDOM_I_WIDTH(7) < readyTrigger && time <= main_time)){
 			nax->FetchCachePlugin_mem_rsp_payload_error = soc->memoryRead(address, FETCH_MEM_DATA_BYTES, (u8*)&nax->FetchCachePlugin_mem_rsp_payload_data);
 			pendingCount-=FETCH_MEM_DATA_BYTES;
+            //address FETCH_MEM_DATA_BYTES (FETCH_MEM_DATA_BITS/8) (No Branch?)
 			address = address + FETCH_MEM_DATA_BYTES;
 			nax->FetchCachePlugin_mem_rsp_valid = 1;
 		}
@@ -543,6 +552,7 @@ public:
 
 
 #define DATA_MEM_DATA_BYTES (DATA_MEM_DATA_BITS/8)
+
 class DataCachedReadChannel{
 public:
     u64 beats;
@@ -612,7 +622,6 @@ public:
     }
 
 
-
     virtual void onReset(){
         nax->DataCachePlugin_mem_read_cmd_ready = 1;
         nax->DataCachePlugin_mem_read_rsp_valid = 0;
@@ -649,6 +658,7 @@ public:
             memcpy(writeCmdChannel.buffer + writeCmdChannel.bytes, &nax->DataCachePlugin_mem_write_cmd_payload_fragment_data, DATA_MEM_DATA_BYTES);
 
             writeCmdChannel.bytes += DATA_MEM_DATA_BYTES;
+            //when write cmd is coming
             if(writeCmdChannel.bytes == DATA_LINE_BYTES){
                 writeRspChannels[id].address = writeCmdChannel.address;
                 writeRspChannels[id].bytes = writeCmdChannel.bytes;
@@ -856,13 +866,13 @@ public:
 
 class RobCtx{
 public:
+    // RvData : u64
     RvData pc;
     bool integerWriteValid;
     RvData integerWriteData;
     bool floatWriteValid;
     RvFloat floatWriteData;
     int floatFlags;
-
     bool csrValid;
     bool csrWriteDone;
     bool csrReadDone;
@@ -870,7 +880,7 @@ public:
     RvData csrWriteData;
     RvData csrReadData;
 
-    IData branchHistory;
+    IData branchHistory; //Todo what type?
     int opId;
 
     void clear(){
@@ -982,8 +992,12 @@ class NaxWhitebox : public SimElement{
 public:
 
     VNaxRiscv_NaxRiscv* nax;
+
+    //define ROB Table
     RobCtx robCtx[ROB_SIZE];
+    //u64 fetchAt / u64 decodeAt
     FetchCtx fetchCtx[4096];
+    //operation
     OpCtx opCtx[4096];
     queue <int> opIdInFlight;
     int sqToOp[256];
@@ -1514,11 +1528,13 @@ void parseArgFirst(int argc, char** argv){
         if (result == -1) break;
         switch (result) {
             case ARG_SEED: {
+                //set random seed
                 Verilated::randSeed(stoi(optarg));
                 srand48(stoi(optarg));
             } break;
 
             case ARG_TRACE: {
+                //set Trace
                 traceWave = true;
 #ifndef TRACE
                 printf("You need to recompile with TRACE=yes to enable tracing"); failure();
@@ -1545,6 +1561,10 @@ void parseArgFirst(int argc, char** argv){
                 trace_enable = false;
                 addPcEvent(value, [&](RvData pc){  trace_enable = false; });
             }break;
+            /*
+             * ARG_TRACE_SPORADIC:设置采样率
+             * ARG_PROGRESS:隔多少周期输出一次仿真报告
+             */
             case ARG_TRACE_SPORADIC: trace_enable = false; trace_sporadic_factor = stof(optarg); break;
             case ARG_TRACE_REF: trace_ref = true; break;
             case ARG_NAME: simName = optarg; break;
@@ -1711,6 +1731,13 @@ void parseArgsSecond(int argc, char** argv){
 }
 
 void verilatorInit(int argc, char** argv){
+    /*
+     * Verilated::debug:set debug level（调试级别）
+     * Verilated::randReset : 随机数种子
+     * Verilated::traceEverOn: 信号变化日志
+     * Verilated::commandArgs ：传递命令行
+     * Verilated::mkdir : mkdir
+     */
     Verilated::debug(0);
     Verilated::randReset(2);
     Verilated::traceEverOn(true);
@@ -1719,6 +1746,9 @@ void verilatorInit(int argc, char** argv){
 }
 
 void spikeInit(){
+    /*
+     * Spike创建处理器实例的代码
+     */
     fptr = trace_ref ? fopen((outputDir + "/spike.log").c_str(),"w") : NULL;
     std::ofstream outfile ("/dev/null",std::ofstream::binary);
     wrap = new sim_wrap();
@@ -1736,6 +1766,9 @@ void spikeInit(){
     isa += "D";
     #endif
     if(RVC) isa += "C";
+    /*
+     * processor_t（指令集架构 / 处理器名字 / 。/。/处理器启动时间/是否立即启动/spike的配置选项/输出文件）
+     */
     proc = new processor_t(isa.c_str(), "MSU", "", wrap, 0, false, fptr, outfile);
     proc->set_impl(IMPL_MMU_SV32, XLEN == 32);
     proc->set_impl(IMPL_MMU_SV39, XLEN == 64);
@@ -1753,19 +1786,33 @@ void spikeInit(){
 }
 
 void rtlInit(){
+    //Todo about the NaxWhitebox
     top = new VNaxRiscv;  // Or use a const unique_ptr, or the VL_UNIQUE_PTR wrapper
     topInternal = top->NaxRiscv;
-
     whitebox = new NaxWhitebox(top->NaxRiscv);
     whitebox->traceGem5(traceGem5);
     if(traceGem5) whitebox->gem5 = ofstream(outputDir + "/trace.gem5o3",std::ofstream::binary);
 
     soc = new Soc(top);
+    /*simElemnets : 模拟的几个部件，vector<SimElement*> simElements;
+     * onReset() postReset() preCycle() postCycle()
+     * soc : 初始化内存,可对内存数据进行读写，支持对外设的读写
+     * 对外设进行写的时候，直接根据address，如果选中PUTC，直接printf
+     * 读的时候，在soc对象内部存在一个，queue <char> customCin;出队即可读出
+     * 模拟读写 Icahce / Dcache / 外部设备
+     * FetchCached : 模拟从ICache中取指令的过程,取指令的延时 +2，并且没有考虑分支预测失败的的情况
+     * DataCached: 分读写通道的时延计算 +2，通道填满后请求就可发出
+     * LsuPeripheral: 模拟对外设数据的读写
+     * whitebox:
+     */
     simElements.push_back(soc);
     simElements.push_back(new FetchCached(top, soc, true));
     simElements.push_back(new DataCached(top, soc, true));
+
+    //模拟内存的读写
     simElements.push_back(new LsuPeripheral(top, soc, &wrap->mmioDut, true));
     simElements.push_back(whitebox);
+
 #ifdef EMBEDDED_JTAG
     simElements.push_back(new Jtag(
         &top->EmbeddedJtagPlugin_logic_jtag_tms,
@@ -1962,7 +2009,9 @@ enum SIM_MS_ENUM
 void simMasterWriteHeader(SIM_MS_ENUM e) {
     simMasterWrite(e);
 }
-
+/*
+ * 将当前仿真时间发给主进程进行同步
+ */
 void simMasterMainTime(){
     char buf[1+sizeof(main_time)];
     buf[0] = SIM_MS_TIME;
@@ -2019,26 +2068,37 @@ void simLoop(){
     try {
         top->clk = 0;
 
+        //将仿真的模块先进行复位
         for(SimElement* simElement : simElements) simElement->onReset();
+
+        //请求队列，模拟getc、putc、and quit the simulation successfully
         testScheduleQueueNext();
+
+
         while (!Verilated::gotFinish()) {
             if(simMaster && main_time % 50000 == 0){
+                //仿真时间同步
                 simMasterMainTime();
             }
 
             ++main_time;
 
+            //控制从属进程的仿真速度
             if(simSlave) simSlaveTick();
 
             if(main_time == timeout){
                 printf("simulation timeout\n");
                 failure();
             }
+
+            //触发对应的事件函数
             if(timeToEvent.count(main_time) != 0){
                 for(auto event : timeToEvent[main_time]){
                     event();
                 }
             }
+
+            //spike启用日志提交功能
             if(trace_ref && proc->get_log_commits_enabled() != trace_enable){
                 if(trace_enable){
                     proc->enable_log_commits();
@@ -2050,9 +2110,12 @@ void simLoop(){
             #ifdef TRACE
             if(traceWave){
                 if(trace_enable || (main_time % trace_sporadic_period) < trace_sporadic_trigger) tfp->dump(main_time);
+                //将波形缓冲区文件的数据刷新到VCD文件中
                 if(main_time % 100000 == 0) tfp->flush();
             }
             #endif
+
+            //通过上次进度以来经过的时间，显示周期数与频率
             if(progressPeriod != 0.0 && main_time % 20000 == 0){
                 auto now = std::chrono::high_resolution_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now-progressLast).count();
@@ -2064,7 +2127,9 @@ void simLoop(){
                     printf("[PROGRESS] %ld cycles %ld KHz\n", cycles, hz/1000);
                 }
             }
+
             top->clk = !top->clk;
+            //复位前5个周期
             top->reset = (main_time < 10) ? 1 : 0;
             #ifdef EMBEDDED_JTAG
                 top->debug_reset = top->reset;
@@ -2075,12 +2140,15 @@ void simLoop(){
                     top->reset = 1;
                 }
             #endif
+                //set start pc
             if(main_time < 11 && startPc != 0x80000000) top->NaxRiscv->PcPlugin_logic_fetchPc_pcReg = startPc;
             if(!top->clk){
-                top->eval();
+                top->eval(); //更新状态
                 if(Verilated::gotFinish()) failure();
             } else {
+                //先执行precycle
                 for(SimElement* simElement : simElements) if(!top->reset || simElement->withoutReset) simElement->preCycle();
+
                 if(!top->reset) {
                     if(timeout_enabled && cycleSinceLastCommit == 10000){
                         printf("NO PROGRESS the cpu hasn't commited anything since too long\n");
@@ -2101,6 +2169,7 @@ void simLoop(){
 
 
                             RvData pc = robCtx.pc;
+                            //
                             if(!spike_enabled){
                                 last_commit_pc = pc;
                                 if(pcToEvent.count(pc) != 0){
@@ -2113,7 +2182,7 @@ void simLoop(){
                                 RvData spike_pc = state->pc;
                                 spikeStep(robCtx);
                                 last_commit_pc = pc;
-
+                                //与spike模拟的pc不同时会报错
                                 assertEq("MISSMATCH PC", pc, spike_pc);
                                 for (auto item : state->log_reg_write) {
                                     if (item.first == 0)
@@ -2243,14 +2312,34 @@ void cleanup(){
 }
 
 int main(int argc, char** argv, char** env){
-    signal(SIGSEGV, handler_crash);
+    /*
+     * 特定的信号并进行处理,SIGSEGV表示访问无效的内存地址
+     * remove()删除文件
+     * cleanup : 刷新缓冲流，关闭文件的指针
+     * parseArgFirst ： 这个函数用于解析命令行传入的option，生成输出目录,并设置仿真时的配置参数
+     * verilatorInit ：设置Verilator的全局变量信息，并创建log文件夹记录仿真信息
+     * rtlInit(); 初始化naxiriscv
+     *
+     * parseArgsSecond：往内存中装载对应的文件，解析相关的符号，还可以设置访存的时延
+     * simMasterSlaveInit ： 提供了网络通信的相关实现
+    */
+     signal(SIGSEGV, handler_crash);
+
     try {
         parseArgFirst(argc, argv);
         verilatorInit(argc, argv);
+        //why use spike,test Excute the instruction，创建spikeInit处理器实例
         spikeInit();
+        //Init the Naxriscv CPU
         rtlInit();
+
+        //deal the command again
         parseArgsSecond(argc, argv);
+
+        //tcp-server-client-implementation
         simMasterSlaveInit();
+
+        //start simulation
         simLoop();
     } catch (const std::exception& e) {
         if(!passFailWritten){

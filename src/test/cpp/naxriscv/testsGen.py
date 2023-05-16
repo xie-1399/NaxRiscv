@@ -669,8 +669,6 @@ rvf = getBoolean("RVF")
 rvd = getBoolean("RVD")
 rva = getBoolean("RVA")
 
-
-
 if xlen == 64:
     arch="rv64im"
     archLinux="rv64im"
@@ -681,7 +679,6 @@ else:
 if rva:
     arch += "a"
     archLinux += "a"
-
 
 if rvf:
     arch += "f"
@@ -1019,11 +1016,3 @@ with open('tests.mk', 'w') as f:
     f.write(f"""\trm -rf {" ".join(ouputs)}\n""")
 
     f.write(f"\n\n")
-
-
-
-# print(tests)
-
-
-# for test in tests:
-#     subprocess.run(test)

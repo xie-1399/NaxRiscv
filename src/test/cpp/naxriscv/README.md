@@ -3,6 +3,7 @@
 ```shell
 # Get the repo
 git clone https://github.com/SpinalHDL/SpinalHDL.git --recursive
+# or git submodule update --init --recursive
 git clone https://github.com/SpinalHDL/NaxRiscv.git --recursive
 cd NaxRiscv
 export NAXRISCV=${PWD}
