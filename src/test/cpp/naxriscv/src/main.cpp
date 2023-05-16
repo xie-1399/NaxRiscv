@@ -295,16 +295,13 @@ bool stdinNonEmpty(){
 
 
 
-
-
-
 class Soc : public SimElement{
 public:
     Memory memory;
     VNaxRiscv* nax;
     u64 clintCmp = 0;
     queue <char> customCin;
-    string putcHistory = "";
+    string putcHistory = "ls";
     string *putcTarget = NULL;
     RvData incrValue = 0;
 
@@ -539,6 +536,7 @@ public:
 	virtual void postCycle(){
         //after dealing the cmd
 		nax->FetchCachePlugin_mem_rsp_valid = 0;
+        //有请求且且没有阻塞时
 		if(pendingCount != 0 && (!stall || VL_RANDOM_I_WIDTH(7) < readyTrigger && time <= main_time)){
 			nax->FetchCachePlugin_mem_rsp_payload_error = soc->memoryRead(address, FETCH_MEM_DATA_BYTES, (u8*)&nax->FetchCachePlugin_mem_rsp_payload_data);
 			pendingCount-=FETCH_MEM_DATA_BYTES;
@@ -656,7 +654,7 @@ public:
             assert(writeCmdChannel.address == nax->DataCachePlugin_mem_write_cmd_payload_fragment_address);
 
             memcpy(writeCmdChannel.buffer + writeCmdChannel.bytes, &nax->DataCachePlugin_mem_write_cmd_payload_fragment_data, DATA_MEM_DATA_BYTES);
-
+            //Why not writecmd latency
             writeCmdChannel.bytes += DATA_MEM_DATA_BYTES;
             //when write cmd is coming
             if(writeCmdChannel.bytes == DATA_LINE_BYTES){
@@ -1796,9 +1794,11 @@ void rtlInit(){
     soc = new Soc(top);
     /*simElemnets : 模拟的几个部件，vector<SimElement*> simElements;
      * onReset() postReset() preCycle() postCycle()
-     * soc : 初始化内存,可对内存数据进行读写，支持对外设的读写
+     *
+     * soc类 : 初始化内存,可对内存数据进行读写，支持对外设的读写
      * 对外设进行写的时候，直接根据address，如果选中PUTC，直接printf
      * 读的时候，在soc对象内部存在一个，queue <char> customCin;出队即可读出
+     * 顶层的soc对象 +
      * 模拟读写 Icahce / Dcache / 外部设备
      * FetchCached : 模拟从ICache中取指令的过程,取指令的延时 +2，并且没有考虑分支预测失败的的情况
      * DataCached: 分读写通道的时延计算 +2，通道填满后请求就可发出
@@ -2083,7 +2083,7 @@ void simLoop(){
 
             ++main_time;
 
-            //控制从属进程的仿真速度
+            //控制从属进程的仿真速度 Todo
             if(simSlave) simSlaveTick();
 
             if(main_time == timeout){
@@ -2165,11 +2165,8 @@ void simLoop(){
                             commits += 1;
                             traps_since_commit = 0;
         //                        printf("Commit %d %x\n", robId, whitebox->robCtx[robId].pc);
-
-
-
                             RvData pc = robCtx.pc;
-                            //
+                            //是否进行spike检查
                             if(!spike_enabled){
                                 last_commit_pc = pc;
                                 if(pcToEvent.count(pc) != 0){
